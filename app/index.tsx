@@ -110,7 +110,6 @@ const App = () => {
           <MarkerWithWrapper
             key={point.properties.searchJobAd.combinedId}
             point={point as PointWithProperties} // Explicitly cast to PointWithProperties
-            isSelected={false}
             onPointPress={() => Alert.alert("Clicked on point!")}
             zoom={zoom}
           />

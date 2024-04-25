@@ -1,44 +1,55 @@
-import { useRef } from "react";
-import type { MapMarker } from "react-native-maps";
-import { Marker } from "react-native-maps";
+import React, { useRef, useMemo } from "react";
+import { View, StyleSheet } from "react-native";
+import { Marker, MapMarker } from "react-native-maps";
 import { Marker as MarkerMap } from "@/components/Marker";
-
 import { PointWithProperties } from "@/app";
 
 type Props = {
   point: PointWithProperties;
   onPointPress: () => void;
-  isSelected: boolean;
   zoom: number;
 };
 
-export default function MarkerWithWrapper({
-  point,
-  onPointPress,
-  zoom,
-  isSelected,
-}: Props) {
-  const coordinates = point.geometry.coordinates;
+const MarkerWithWrapper = ({ point, onPointPress, zoom }: Readonly<Props>) => {
   const markerRef = useRef<MapMarker>(null);
+  const coordinates = point.geometry.coordinates;
 
-  const lat = coordinates[1];
-  const lng = coordinates[0];
-
-  const job = point.properties.job;
+  // Memoize content to avoid recomputation on each render
+  const markerContent = useMemo(() => {
+    if (zoom < 12) {
+      return <View style={styles.redDot} />;
+    } else {
+      const job = point.properties.job;
+      return (
+        <MarkerMap
+          companyLogo={job.company.logoImg?.variants.min_dim_64_url ?? null}
+        />
+      );
+    }
+  }, [zoom, point]); // Dependencies that affect the content
 
   return (
     <Marker
       ref={markerRef}
-      tracksViewChanges={true}
+      tracksViewChanges={false} // Set to false for performance
       coordinate={{
-        latitude: lat,
-        longitude: lng,
+        latitude: coordinates[1],
+        longitude: coordinates[0],
       }}
-      onPress={() => onPointPress()}
+      onPress={zoom < 12 ? undefined : onPointPress} // Only handle press when zoomed in
     >
-      <MarkerMap
-        companyLogo={job.company.logoImg?.variants.min_dim_64_url ?? null}
-      />
+      {markerContent}
     </Marker>
   );
-}
+};
+
+const styles = StyleSheet.create({
+  redDot: {
+    width: 10, // Small dot size
+    height: 10,
+    backgroundColor: "red",
+    borderRadius: 5, // Circular shape
+  },
+});
+
+export default MarkerWithWrapper;
