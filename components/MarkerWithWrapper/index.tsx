@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 import type { MapMarker } from "react-native-maps";
 import { Marker } from "react-native-maps";
 import { Marker as MarkerMap } from "@/components/Marker";

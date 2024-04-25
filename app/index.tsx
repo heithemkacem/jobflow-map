@@ -1,14 +1,18 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useRef, useState, useCallback, useMemo } from "react";
 import { View, StyleSheet, Alert } from "react-native";
-import type { Region } from "react-native-maps";
-import MapView, { Circle, PROVIDER_GOOGLE } from "react-native-maps";
-import type { BBox, GeoJsonProperties } from "geojson";
-import type { PointFeature } from "supercluster";
+import MapView, { Circle, PROVIDER_GOOGLE, Region } from "react-native-maps";
 import useSupercluster from "use-supercluster";
 import MarkerWithWrapper from "@/components/MarkerWithWrapper";
 import jobs from "@/constants/jobs.json";
+import type { BBox, GeoJsonProperties } from "geojson";
+import type { PointFeature } from "supercluster";
 import { SearchJobAdRo } from "@/models";
-
+import throttle from "lodash.throttle"; // Import throttle
+const DEFAULT_MAP_LOCATION = {
+  lat: 52.5067296,
+  lng: 13.2599281,
+};
+const THROTTLE_INTERVAL = 200;
 export interface PointProperties {
   cluster: boolean;
   color: string;
@@ -20,214 +24,142 @@ export type PointWithProperties = PointFeature<
   GeoJsonProperties & PointProperties
 >;
 
-const DEFAULT_MAP_LOCATION = {
-  lat: 52.5067296,
-  lng: 13.2599281,
-};
-
 const calculateDeltas = (latitude: number, radius: number) => {
-  // Earth's radius in kilometers
-  const earthRadius = 6371;
-  // This basically adds empty space around the radius circle
-  // For some reason adding the radius twice works perfectly
-  const additionalCoverage = radius;
-  // Convert distance to radians
-  const distanceRadians = (radius + additionalCoverage) / earthRadius;
-
-  // Calculate latitude delta (1 degree = 111.32 km)
+  const earthRadius = 6371; // Earth's radius in kilometers
+  const distanceRadians = (radius * 2) / earthRadius;
   const latDelta = distanceRadians * (180 / Math.PI);
-
-  // Calculate longitude delta based on latitude
   const lonDelta = latDelta / Math.cos((latitude * Math.PI) / 180);
-
-  return {
-    latDelta,
-    lonDelta,
-  };
+  return { latDelta, lonDelta };
 };
 
-const Map = () => {
+const regionToBoundingBox = (region: Region): BBox => {
+  const longitudeDelta =
+    region.longitudeDelta < 0
+      ? region.longitudeDelta + 360
+      : region.longitudeDelta;
+  return [
+    region.longitude - longitudeDelta,
+    region.latitude - region.latitudeDelta,
+    region.longitude + longitudeDelta,
+    region.latitude + region.latitudeDelta,
+  ];
+};
+
+const App = () => {
   const mapRef = useRef<MapView>(null);
+  const [bounds, setBounds] = useState<BBox | undefined>(undefined);
+  const [zoom, setZoom] = useState<number>(10);
 
-  const [bounds, setBounds] = useState<BBox>();
-  const [zoom, setZoom] = useState<number>(12);
+  const { latDelta, lonDelta } = useMemo(() => {
+    return calculateDeltas(DEFAULT_MAP_LOCATION.lat, 75);
+  }, []);
 
-  const latitude = DEFAULT_MAP_LOCATION.lat;
+  const searchResultJobAds = useMemo(() => {
+    return jobs.searchJobAds.slice(0, 300);
+  }, []); // Memoize the initial data
 
-  const { latDelta, lonDelta } = calculateDeltas(latitude, 75);
+  const points = useMemo(
+    () => {
+      return searchResultJobAds.map((searchJobAd) => {
+        return {
+          type: "Feature",
+          properties: {
+            cluster: false,
+            color: "blue",
+            job: searchJobAd.jobAd,
+            searchJobAd,
+          },
+          geometry: {
+            type: "Point",
+            coordinates: [
+              searchJobAd.primaryLocation.location.lng,
+              searchJobAd.primaryLocation.location.lat,
+            ],
+          },
+        } as PointWithProperties;
+      });
+    },
+    [searchResultJobAds] // Ensure the memoization considers the right dependencies
+  );
 
-  // TODO: This shouldn't need to be sliced!
-  const searchResultJobAds = jobs.searchJobAds.slice(0, 300);
+  const onRegionChangeComplete = useCallback(
+    throttle((region: Region) => {
+      setBounds(regionToBoundingBox(region));
+      mapRef.current?.getCamera().then((camera) => {
+        setZoom(camera?.zoom ?? 10);
+      });
+    }, THROTTLE_INTERVAL),
+    [] // No dependencies since this is callback and throttle initialization
+  );
 
-  const regionToBoundingBox = (region: Region): BBox => {
-    let lngD: number;
-    if (region.longitudeDelta < 0) lngD = region.longitudeDelta + 360;
-    else lngD = region.longitudeDelta;
-
-    return [
-      region.longitude - lngD,
-      region.latitude - region.latitudeDelta,
-      region.longitude + lngD,
-      region.latitude + region.latitudeDelta,
-    ];
-  };
-
-  const onRegionChangeComplete = async (region: Region) => {
-    const mapBoundsFirst = regionToBoundingBox(region);
-
-    const originalWidth = mapBoundsFirst[2] - mapBoundsFirst[0];
-    const originalHeight = mapBoundsFirst[3] - mapBoundsFirst[1];
-
-    const mapBounds = [
-      mapBoundsFirst[0] + originalWidth / 4,
-      mapBoundsFirst[1] + originalHeight / 4,
-      mapBoundsFirst[2] - originalWidth / 4,
-      mapBoundsFirst[3] - originalHeight / 4,
-    ] as any;
-
-    setBounds(mapBounds);
-
-    const camera = await mapRef.current?.getCamera();
-
-    setZoom(camera?.zoom ?? 10);
-  };
-
-  const points = searchResultJobAds.map((searchJobAd) => {
-    const loc = searchJobAd.primaryLocation;
-
-    return {
-      type: "Feature",
-      properties: {
-        job: searchJobAd.jobAd,
-        cluster: false,
-        color: "blue",
-        searchJobAd,
-      },
-      geometry: {
-        type: "Point",
-        coordinates: [loc.location.lng, loc.location.lat],
-      },
-    } as PointWithProperties;
-  });
-
-  const { clusters, supercluster } = useSupercluster({
+  const { clusters } = useSupercluster({
     points,
     bounds,
     zoom,
     options: {
-      radius: 60,
+      radius: 75,
       maxZoom: 25,
     },
   });
 
-  function onPointPress() {
-    Alert.alert(`Clicked on point!`);
-  }
-
-  const renderMarkers = () => {
-    console.log(`points: ${points.length}`);
-    return points.map((point) => {
-      return (
-        <MarkerWithWrapper
-          key={point.properties.searchJobAd.combinedId}
-          isSelected={false}
-          onPointPress={onPointPress}
-          point={point}
-          zoom={zoom}
-        ></MarkerWithWrapper>
-      );
-    });
-  };
+  const renderMarkers = useMemo(
+    () =>
+      clusters
+        .filter((cluster) => !cluster.properties.cluster) // Filter out clusters
+        .map((point) => (
+          <MarkerWithWrapper
+            key={point.properties.searchJobAd.combinedId}
+            point={point as PointWithProperties} // Explicitly cast to PointWithProperties
+            isSelected={false}
+            onPointPress={() => Alert.alert("Clicked on point!")}
+            zoom={zoom}
+          />
+        )),
+    [clusters] // Only recompute if clusters change
+  );
 
   return (
-    <View
-      style={{
-        flex: 1,
-      }}
-    >
-      <View
-        style={{
-          flex: 1,
-          position: "relative",
+    <View style={styles.container}>
+      <MapView
+        rotateEnabled={false} // Disable map rotation
+        pitchEnabled={false} // Disable pitch/tilt
+        zoomControlEnabled={false} // Disable zoom controls (if not needed)
+        scrollEnabled={true} // Keep basic map navigation
+        zoomEnabled={true} // Allow zooming in and out
+        ref={mapRef}
+        style={styles.map}
+        provider={PROVIDER_GOOGLE}
+        initialRegion={{
+          latitude: DEFAULT_MAP_LOCATION.lat,
+          longitude: DEFAULT_MAP_LOCATION.lng,
+          latitudeDelta: latDelta,
+          longitudeDelta: lonDelta,
         }}
+        onRegionChangeComplete={onRegionChangeComplete}
+        showsUserLocation={true}
       >
-        <MapView
-          ref={mapRef}
-          style={styles.map}
-          provider={PROVIDER_GOOGLE}
-          onRegionChangeComplete={onRegionChangeComplete}
-          initialRegion={{
+        <Circle
+          center={{
             latitude: DEFAULT_MAP_LOCATION.lat,
             longitude: DEFAULT_MAP_LOCATION.lng,
-            latitudeDelta: latDelta,
-            longitudeDelta: lonDelta,
           }}
-          camera={{
-            center: {
-              latitude: DEFAULT_MAP_LOCATION.lat,
-              longitude: DEFAULT_MAP_LOCATION.lng,
-            },
-            pitch: 0,
-            heading: 0,
-            zoom: 10,
-          }}
-          rotateEnabled={false}
-          zoomEnabled={true}
-          pitchEnabled={false}
-          zoomControlEnabled={true}
-          showsUserLocation={true}
-          showsMyLocationButton={false}
-        >
-          <Circle
-            center={{
-              latitude: DEFAULT_MAP_LOCATION.lat,
-              longitude: DEFAULT_MAP_LOCATION.lng,
-            }}
-            radius={1000 * 50}
-            strokeWidth={2}
-            strokeColor="blue"
-          />
-
-          {renderMarkers()}
-        </MapView>
-      </View>
+          radius={1000 * 50}
+          strokeWidth={2}
+          strokeColor="blue"
+        />
+        {renderMarkers}
+      </MapView>
     </View>
   );
 };
 
 const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+  },
   map: {
     flex: 1,
   },
-  cluster: {
-    borderRadius: 100,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 2,
-    borderColor: "blue",
-    backgroundColor: "white",
-  },
-  clusterCount: {
-    fontSize: 16,
-    color: "blue",
-  },
-  loaderWrapper: {
-    borderRadius: 50,
-    alignSelf: "center",
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "white",
-    shadowColor: "black",
-    shadowOffset: {
-      width: 2,
-      height: 2,
-    },
-    shadowOpacity: 0.25,
-    shadowRadius: 7,
-    position: "absolute",
-    top: 80,
-  },
 });
 
-export default Map;
+export default App;
