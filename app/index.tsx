@@ -123,7 +123,7 @@ const App = () => {
       <MapView
         rotateEnabled={false} // Disable map rotation
         pitchEnabled={false} // Disable pitch/tilt
-        zoomControlEnabled={false} // Disable zoom controls (if not needed)
+        zoomControlEnabled={true} // Disable zoom controls (if not needed)
         scrollEnabled={true} // Keep basic map navigation
         zoomEnabled={true} // Allow zooming in and out
         ref={mapRef}
